@@ -154,6 +154,22 @@ Each folder under `models/` contains the code, a `README.md` and a `requirements
 
 ---
 
+## 6. Evaluation Protocol
+
+To make the models comparable, every model holds out the **same validation set**:
+
+```python
+train_test_split(..., test_size=0.2, random_state=42, stratify=target)   # 1,523 tweets
+```
+
+- Each model keeps the checkpoint with the best **validation F1** and predicts the test set with it.
+- The ensemble tunes its RoBERTa/DeBERTa weight on this validation set, so its reported ensemble F1 is slightly optimistic.
+- Known data caveat: `train.csv` contains 69 tweet texts that appear more than once (179 rows), 18 of them with conflicting labels, and 78 test tweets also appear verbatim in `train.csv`. Duplicates can fall on both sides of the split and inflate validation scores a little.
+
+> The outputs saved inside the notebooks come from runs made **before** these evaluation fixes (different splits, and for BiLSTM the submission was produced by the last epoch rather than the best one). Re-run the notebooks to get numbers that follow this protocol.
+
+---
+
 ##  Notes
 
 This project is based on the Kaggle challenge: [Real or Not? NLP with Disaster Tweets].  

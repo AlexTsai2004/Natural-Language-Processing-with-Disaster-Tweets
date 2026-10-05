@@ -1,178 +1,72 @@
+# 📘 BiLSTM 災難推文分類（Baseline）
 
-# 📘 BiLSTM 時間序列預測專案
-
-本專案展示了如何使用 **雙向 LSTM（BiLSTM）** 模型來進行單變數時間序列預測，實作上基於 PyTorch 框架，並透過 Jupyter Notebook 撰寫完整流程。以下為各段程式碼的詳細說明。
+本資料夾使用 **雙向 LSTM（BiLSTM）** 判斷推文是否與真實災難有關（二元分類），作為後續 Transformer 模型的 baseline。以 PyTorch 實作，流程寫在 Google Colab Notebook 中。
 
 ---
 
 ## 📁 專案檔案
 
-- `BiLSTM.ipynb`：主程式 Notebook，內含資料處理、模型建立、訓練與測試全流程。
+- `BiLSTM.ipynb`：主程式 Notebook，內含資料處理、模型建立、訓練、評估與測試集預測全流程。
+- `requirements.txt`：所需套件與版本。
 
 ---
 
-## 📌 程式碼區塊說明
+## 📌 流程說明
 
-### 🔹 1. 引入套件
+### 🔹 1. 文字前處理
 
-```python
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import torch
-import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+- 轉小寫，移除網址與 `@使用者`。
+- hashtag 只移除 `#` 符號、保留字本身（例如 `#earthquake` → `earthquake`，這類字是很強的災難訊號）。
+- 移除 emoji 與標點，以 NLTK 斷詞、去除停用詞並做 lemmatization。
+
+### 🔹 2. 切分資料與建立詞表
+
+- 以 `test_size=0.2, random_state=42, stratify=target` 切分訓練/驗證集，與本 repo 其他模型使用相同的驗證集。
+- 詞表只用**訓練集**建立（最常見的 10,000 個字，另加 `<PAD>`、`<UNK>`），避免驗證集字彙洩漏。
+- 每則推文轉成長度 50 的 id 序列（不足補 `<PAD>`，過長截斷）。
+
+### 🔹 3. 模型架構
+
 ```
-這部分引入所有所需的函式庫，包括數據處理、模型建立與評估函數。
-
----
-
-### 🔹 2. 讀取與預處理資料
-
-```python
-df = pd.read_csv("your_data.csv")
-scaler = MinMaxScaler()
-data_normalized = scaler.fit_transform(df.values.reshape(-1, 1))
-```
-- 使用 `pandas` 讀入資料。
-- 使用 `MinMaxScaler` 對資料進行 0~1 正規化。
-
----
-
-### 🔹 3. 建立時間序列資料集
-
-```python
-def create_inout_sequences(input_data, tw):
-    inout_seq = []
-    L = len(input_data)
-    for i in range(L - tw):
-        train_seq = input_data[i:i+tw]
-        train_label = input_data[i+tw:i+tw+1]
-        inout_seq.append((train_seq, train_label))
-    return inout_seq
-```
-- 定義函數以滑動視窗（time window）方式建立模型輸入序列與對應標籤。
-
----
-
-### 🔹 4. 資料分割
-
-```python
-train_size = int(len(data_normalized) * 0.7)
-val_size = int(len(data_normalized) * 0.2)
-test_size = len(data_normalized) - train_size - val_size
-```
-- 將資料依比例劃分為訓練、驗證與測試集。
-
----
-
-### 🔹 5. 定義 BiLSTM 模型
-
-```python
-class BiLSTM(nn.Module):
-    def __init__(self, input_size=1, hidden_layer_size=64, output_size=1):
-        super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_layer_size, batch_first=True, bidirectional=True)
-        self.linear = nn.Linear(hidden_layer_size * 2, output_size)
-
-    def forward(self, input_seq):
-        lstm_out, _ = self.lstm(input_seq)
-        out = self.linear(lstm_out[:, -1])
-        return out
-```
-- 使用雙向 LSTM 結構，輸出接 Linear 層做回歸預測。
-- `batch_first=True` 代表輸入維度為 `(batch, seq, features)`。
-
----
-
-### 🔹 6. 模型訓練
-
-```python
-model = BiLSTM()
-loss_function = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+Embedding(128) → BiLSTM(hidden 128) → 串接正反向最後的 hidden state → Dropout(0.5) → Linear → 1 個 logit
 ```
 
-```python
-for epoch in range(num_epochs):
-    for seq, labels in train_inout_seq:
-        optimizer.zero_grad()
-        y_pred = model(seq)
-        loss = loss_function(y_pred, labels)
-        loss.backward()
-        optimizer.step()
-```
-- 訓練模型，使用 Adam 優化器與 MSE 作為損失函數。
-- 每個 epoch 中遍歷所有訓練資料並進行梯度更新。
+- 依每則推文的實際長度使用 `pack_padded_sequence`，最後的 hidden state 不會被補上的 `<PAD>` 影響。
 
----
+### 🔹 4. 訓練
 
-### 🔹 7. 模型評估與預測
+- 損失函數 `BCEWithLogitsLoss`，Adam 優化器（lr = 1e-3），batch size 32，最多 10 個 epoch。
+- Early stopping 監看驗證 loss（patience 3）。
+- 每個 epoch 計算驗證集 F1 與 Accuracy，保留 **F1 最高那一輪的權重**，訓練結束後還原該權重。
+- 固定隨機種子（42），結果可重現。
 
-```python
-model.eval()
-predictions = []
-for seq, _ in test_seq:
-    with torch.no_grad():
-        predictions.append(model(seq).item())
-```
+### 🔹 5. 評估與視覺化
 
-- 將模型切換為評估模式，防止 dropout 或 batchnorm 影響。
-- 逐筆預測測試資料。
+- 輸出最佳 epoch 的 F1、Accuracy 與 classification report。
+- 繪製訓練/驗證 loss 曲線與混淆矩陣。
 
----
+### 🔹 6. 測試集預測
 
-### 🔹 8. 性能指標
-
-```python
-def MAPE(y_true, y_pred):
-    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-
-mae = mean_absolute_error(y_test, y_pred)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-mape = MAPE(y_test, y_pred)
-```
-- 計算 MAE、RMSE 與 MAPE 等評估指標。
-
----
-
-### 🔹 9. 視覺化結果
-
-```python
-plt.plot(y_test, label='True')
-plt.plot(y_pred, label='Predicted')
-plt.legend()
-plt.show()
-```
-- 畫出實際值與預測值的對比圖。
+- 以最佳權重預測 `test.csv`，輸出 `submission.csv`（格式：`id,target`）。
 
 ---
 
 ## ⚙️ 環境需求
 
-```text
-Python 3.8+
-torch
-pandas
-numpy
-scikit-learn
-matplotlib
-```
+見 `requirements.txt`（Python 3.11、PyTorch、pandas、scikit-learn、NLTK、emoji、matplotlib、seaborn）。
 
 ---
 
 ## 🚀 使用方式
 
-```bash
-pip install -r requirements.txt
-jupyter notebook
-# 打開 BiLSTM.ipynb 執行每段程式碼
-```
+1. 在 Google Colab 開啟 `BiLSTM.ipynb`。
+2. 將 repo 中 `data/train.csv`、`data/test.csv` 上傳到 `/content/`。
+3. 依序執行，完成後會自動下載 `submission.csv`。
+
+> Notebook 中保存的輸出結果是修正前執行的，重新執行後數字會不同。
 
 ---
 
 ## 📬 聯絡方式
 
 如有任何問題，請聯絡作者或開啟 Issue。
-

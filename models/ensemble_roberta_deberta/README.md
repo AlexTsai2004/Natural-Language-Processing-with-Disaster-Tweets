@@ -9,7 +9,8 @@ This project performs disaster tweet classification using transformer-based mode
 * Fine-tunes `roberta-base` with LoRA (parameter-efficient fine-tuning)
 * Fine-tunes `microsoft/deberta-v3-base` directly
 * Uses Hugging Face `Trainer` API for training
-* Implements logit-level weighted ensembling (RoBERTa + DeBERTa)
+* Holds out a stratified 20% validation split (the same split used by every model in this repo)
+* Implements probability-level weighted ensembling (RoBERTa + DeBERTa), with the weight tuned on the validation split
 * Outputs final predictions to a CSV for Kaggle submission
 * Metrics: Accuracy and F1-score
 
@@ -23,7 +24,7 @@ This project performs disaster tweet classification using transformer-based mode
 ├── sample_submission.csv        # Sample format for submission
 ├── roberta_final_model/         # Fine-tuned RoBERTa model (saved)
 ├── deberta_final_model/         # Fine-tuned DeBERTa model (saved)
-└── essemble_submission.csv      # Final output file for submission
+└── ensemble_submission.csv      # Final output file for submission
 ```
 
 ## 🚀 Quick Start
@@ -54,17 +55,18 @@ The script will:
 2. Fine-tune RoBERTa using LoRA
 3. Fine-tune DeBERTa
 4. Make predictions on test data
-5. Perform logit-level weighted ensembling (default weights: 0.3 RoBERTa, 0.7 DeBERTa)
-6. Export predictions to `essemble_submission.csv`
+5. Search the RoBERTa/DeBERTa weight (0.00-1.00, step 0.05) that maximises validation F1, and print each model's and the ensemble's validation F1
+6. Perform probability-level weighted ensembling on the test set
+7. Export predictions to `ensemble_submission.csv`
 
 ## ⚙️ Configuration
 
 You can modify:
 
 * Model names (RoBERTa, DeBERTa)
-* `TrainingArguments` for batch size, epochs, learning rate, etc.
+* `TrainingArguments` for batch size, epochs, learning rate, etc. (RoBERTa-LoRA uses 2e-4, DeBERTa uses 1.7e-5; each model has its own `output_dir`)
 * LoRA parameters (`r`, `alpha`, `dropout`, target modules)
-* Ensemble weights (default: 0.3 for RoBERTa, 0.7 for DeBERTa)
+* Ensemble weight search grid (`np.linspace(0, 1, 21)`)
 
 ## 📊 Evaluation
 
@@ -88,14 +90,14 @@ Metrics are computed during training using a custom `compute_metrics` function.
 
 * RoBERTa uses LoRA for efficient fine-tuning. DeBERTa is fine-tuned directly.
 * If GPU memory issues arise, the script includes basic cache-clearing techniques.
-* The validation set is not separated in this demo version; for real applications, split the training data accordingly.
+* The ensemble weight is tuned on the same validation split used to report the ensemble F1, so that number is slightly optimistic.
 
 ## 📤 Output
 
 The final prediction file is saved as:
 
 ```
-essemble_submission.csv
+ensemble_submission.csv
 ```
 
 Format:

@@ -31,7 +31,7 @@
 讀取 `train.csv` 與 `test.csv`，對文本欄位套用清理函式。
 
 ### 6. 切分訓練與驗證資料  
-以 80% 訓練、20% 驗證比例切分資料。
+以 80% 訓練、20% 驗證比例分層切分（stratified）資料，與其他模型使用相同切分。
 
 ### 7. 載入 Tokenizer 與模型  
 使用 `microsoft/deberta-v3-base` 的 tokenizer 與 `AutoModelForSequenceClassification`，設定二分類。
@@ -46,7 +46,7 @@
 自訂 Focal Loss 損失函數以處理類別不平衡。
 
 ### 11. 實作訓練迴圈與 EarlyStopping  
-每個 epoch 訓練並驗證，若驗證 F1 分數與 Loss 無改善達 patience 次數則停止訓練，並儲存最佳模型。
+每個 epoch 訓練並驗證，依驗證 F1 分數儲存最佳模型；F1 連續 patience 次沒有改善則停止訓練。
 
 ### 12. 紀錄 TensorBoard  
 訓練過程中紀錄 Loss 與 F1 分數。
@@ -55,7 +55,7 @@
 訓練結束後繪製並儲存訓練與驗證的 Loss 曲線。
 
 ### 14. 載入最佳模型並評估  
-載入驗證 Loss 最佳模型，輸出分類報告與 F1 分數。
+載入驗證 F1 最佳模型，輸出分類報告與 F1 分數。
 
 ### 15. 繪製混淆矩陣  
 視覺化驗證資料的混淆矩陣。

@@ -27,7 +27,7 @@
 建立 `RobertaTweetDataset`，處理文字轉換為模型輸入格式。
 
 ### 5. 切分訓練與驗證資料  
-使用 80% 訓練、20% 驗證的比例進行切分。
+使用 80% 訓練、20% 驗證的比例分層切分（stratified），與其他模型使用相同切分。
 
 ### 6. 建立 DataLoader  
 使用 PyTorch 的 DataLoader 包裝資料集。

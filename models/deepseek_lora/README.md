@@ -94,7 +94,7 @@ F1 score 早停監控
 
 Training Hyperparameters
 
-Learning Rate: 1.7e-5
+Learning Rate: 2e-4（LoRA 常用範圍）
 
 Batch Size: 4
 
@@ -106,7 +106,7 @@ Metric: F1
 
 Evaluation
 
-使用 Accuracy, Precision, Recall, F1 score，驗證集採 stratified split 10% 子集。
+使用 Accuracy, Precision, Recall, F1 score，驗證集為與其他模型相同的 stratified 20% 切分（test_size=0.2, random_state=42）。評估時只在每個樣本的答案 token 位置比較預測（causal LM 需往前位移一格），訓練與推理使用同一個 prompt。
 
 Environmental Impact
 

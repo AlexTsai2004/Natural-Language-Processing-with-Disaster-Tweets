@@ -17,7 +17,7 @@ torch.cuda.ipc_collect()
 # --- 0. 設定和參數 ---
 model_id = "deepseek-ai/deepseek-llm-7b-chat"
 output_dir = "./deepseek_lora_disaster_tweets"
-learning_rate = 1.7e-5
+learning_rate = 2e-4  # LoRA 只訓練少量參數，學習率通常落在 1e-4 ~ 5e-4；原本 1.7e-5 很可能訓練不足
 batch_size = 4
 gradient_accumulation_steps = 1
 num_train_epochs = 2# 可以設定一個較大的數字，因為早停會幫你決定何時停止
@@ -38,18 +38,18 @@ except FileNotFoundError:
 print(f"訓練數據集大小：{len(train_df)}")
 print(f"測試數據集大小：{len(test_df)}")
 
-train_subset_df = train_df.sample(frac=0.8, random_state=42)
-train_data, eval_data = train_test_split(train_subset_df, test_size=0.1, random_state=42, stratify=train_subset_df['target'])
+# 所有模型共用同一個切分：test_size=0.2, random_state=42, stratify=target
+# （原本先隨機丟掉 20% 訓練資料、再切 10% 驗證，驗證集與其他模型不同，無法比較）
+train_data, eval_data = train_test_split(train_df, test_size=0.2, random_state=42, stratify=train_df['target'])
 
 # --- 2. 載入 Tokenizer (修正: 提前到這裡) ---
 # 提前載入 tokenizer，以便在數據格式化函數中使用
 print(f"\n正在載入 Tokenizer: {model_id}...")
 
 
-tokenizer = AutoTokenizer.from_pretrained(model_id, truncation=True, padding=True, max_length=141)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
 tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "left" # 為生成任務設置為右側填充
-tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = "left" # 生成任務使用左側填充
 
 print("Tokenizer 載入完成。")
 # 移除可能導致錯誤的行
@@ -58,16 +58,26 @@ print("Tokenizer 載入完成。")
 gc.collect()
 
 # --- 3. 格式化數據集為指令微調格式 (Instruction Tuning Format) ---
-def format_data_for_sft(sample):
-    text = sample['text']
-    target = str(sample['target'])
+# 訓練與推理共用同一個 prompt：原本推理用的三引號字串多了開頭換行、縮排與逗號，
+# 和訓練時的格式不同，微調學到的行為不一定能套用
+def build_prompt(text):
+    return (
+        "任務：判斷以下推文是否與真實災難相關。\n"
+        "如果推文與真實災難相關，請回答 '1'。\n"
+        "如果推文與真實災難不相關，請回答 '0'。\n"
+        "請只回答 '1' 或 '0'，不要包含其他文字。\n\n"
+        f"推文: \"{text}\"\n答案:"
+    )
 
+def format_example(text, target):
     messages = [
-        {"role": "user", "content": f"任務：判斷以下推文是否與真實災難相關。\n如果推文與真實災難相關 請回答 '1'。\n如果推文與真實災難不相關 請回答 '0'。\n請只回答 '1' 或 '0'，不要包含其他文字。\n\n推文: \"{text}\"\n答案:"},
-        {"role": "assistant", "content": target}
+        {"role": "user", "content": build_prompt(text)},
+        {"role": "assistant", "content": str(target)}
     ]
-    formatted_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-    return {"text": formatted_text}
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+
+def format_data_for_sft(sample):
+    return {"text": format_example(sample['text'], sample['target'])}
 
 # 創建 Hugging Face Dataset 對象
 train_dataset = Dataset.from_pandas(train_data).map(format_data_for_sft, remove_columns=['id', 'keyword', 'location', 'text', 'target'])
@@ -111,47 +121,44 @@ model = get_peft_model(model, peft_config)
 print("模型已應用 LoRA 配置。")
 model.print_trainable_parameters()
 
-# --- 6. 定義 compute_metrics 函數 (新增加的部分) ---
-# 這個函數會在 evaluation_strategy 步驟時被調用
-def compute_metrics(eval_preds):
-    predictions_ids = eval_preds.predictions.argmax(axis=-1)
-    labels_ids = eval_preds.label_ids
+# --- 6. 定義 compute_metrics 函數 ---
+# 找出答案 '0' / '1' 實際對應的 token id：把同一則推文分別格式化成答案 0 和 1，
+# 兩者第一個不同的 token 就是答案 token（不必假設 tokenizer 怎麼切數字與前面的空白）
+_ids0 = tokenizer(format_example("x", 0), add_special_tokens=False)["input_ids"]
+_ids1 = tokenizer(format_example("x", 1), add_special_tokens=False)["input_ids"]
+_diff = next(i for i, (a, b) in enumerate(zip(_ids0, _ids1)) if a != b)
+token_0_id, token_1_id = _ids0[_diff], _ids1[_diff]
 
-    token_0_id = tokenizer.convert_tokens_to_ids('0')
-    token_1_id = tokenizer.convert_tokens_to_ids('1')
+def preprocess_logits_for_metrics(logits, labels):
+    # 每個 eval batch 只保留 argmax，避免累積整個詞表的 logits（約 10 萬維 × 序列長度 × 樣本數）造成 OOM
+    if isinstance(logits, tuple):
+        logits = logits[0]
+    return logits.argmax(dim=-1)
+
+def compute_metrics(eval_preds):
+    predictions_ids = eval_preds.predictions
+    labels_ids = eval_preds.label_ids
 
     parsed_preds = []
     parsed_labels = []
 
-    for i in range(predictions_ids.shape[0]):
-        sample_pred_ids = predictions_ids[i]
-        sample_label_ids = labels_ids[i]
-
-        answer_start_idx = -1
-        for j in range(len(sample_label_ids)):
-            if sample_label_ids[j] != -100:
-                answer_start_idx = j
+    for sample_pred_ids, sample_label_ids in zip(predictions_ids, labels_ids):
+        # 答案 token 是序列中「最後一個」0/1 token（prompt 本身也含有 '0'、'1'，所以從後面找）。
+        # 原本取第一個非 -100 的位置，但 SFTTrainer 對整段文字計算 loss，那個位置其實是 prompt 開頭。
+        answer_idx = -1
+        for j in range(len(sample_label_ids) - 1, 0, -1):
+            if sample_label_ids[j] in (token_0_id, token_1_id):
+                answer_idx = j
                 break
+        if answer_idx == -1:
+            continue
 
-        if answer_start_idx != -1:
-            true_token_id = sample_label_ids[answer_start_idx]
-            if true_token_id == token_0_id:
-                parsed_labels.append(0)
-            elif true_token_id == token_1_id:
-                parsed_labels.append(1)
-            else:
-                continue # Skip if the label is not 0 or 1
+        parsed_labels.append(0 if sample_label_ids[answer_idx] == token_0_id else 1)
 
-            predicted_token_id = sample_pred_ids[answer_start_idx]
-            if predicted_token_id == token_0_id:
-                parsed_preds.append(0)
-            elif predicted_token_id == token_1_id:
-                parsed_preds.append(1)
-            else:
-                # If prediction is neither '0' nor '1', assign a default (e.g., 0)
-                # or handle as an error/unclear prediction.
-                # For classification, it's often safer to assign a default.
-                parsed_preds.append(0)
+        # causal LM 在位置 t 的輸出預測的是第 t+1 個 token，所以答案的預測在前一個位置
+        predicted_token_id = sample_pred_ids[answer_idx - 1]
+        # 預測既不是 0 也不是 1 時視為 0
+        parsed_preds.append(1 if predicted_token_id == token_1_id else 0)
 
     if len(parsed_labels) == 0:
         # Avoid division by zero if no valid labels were found
@@ -178,12 +185,13 @@ training_arguments = TrainingArguments(
     learning_rate=learning_rate,
     num_train_epochs=num_train_epochs, # 可以設定一個較大的數字，早停會控制實際的訓練步數
     logging_steps=50,
-    save_steps=500,
+    save_steps=250,           # 與 eval_steps 相同，每次評估都有對應的 checkpoint 可選為最佳模型
     save_total_limit=2,
     warmup_steps=130,
-    eval_strategy="steps",     # Evaluate every epoch
-    save_strategy="steps", 
-    eval_steps=100,
+    eval_strategy="steps",
+    save_strategy="steps",
+    eval_steps=250,           # 驗證集變成 1,523 筆，評估間隔拉長以控制時間
+    per_device_eval_batch_size=batch_size,
     fp16=True, # 啟用混合精度訓練，這將大大幫助 GPU 顯存使用
     optim="paged_adamw_8bit", # 8-bit 優化器，進一步節省顯存
     report_to="none",
@@ -204,9 +212,11 @@ trainer = SFTTrainer(
     model=model,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    peft_config=peft_config,
+    # 不再傳 peft_config：model 已經用 get_peft_model 套過 LoRA，重複傳入可能再包一層
+    processing_class=tokenizer,  # 使用上面設定過 pad token / padding side 的 tokenizer，而不是讓 SFTTrainer 另外載一份
     args=training_arguments,
     compute_metrics=compute_metrics,
+    preprocess_logits_for_metrics=preprocess_logits_for_metrics,
     callbacks=[early_stopping_callback], # 將早停回調添加到這裡
 )
 
@@ -232,31 +242,19 @@ print(f"微調後的 LoRA 適配器和 Tokenizer 已保存到 {output_dir}")
 # --- 9. 推理 (使用微調後的模型) (原步驟 8，現在是 9) ---
 print("\n開始使用微調後的模型進行推理...")
 
-base_model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    quantization_config=bnb_config,
-    device_map="auto", # 這裡會自動將模型載入到 CUDA
-    torch_dtype=torch.float16,
-    trust_remote_code=True,
-)
-base_model.eval()
-
-from peft import PeftModel
-model_for_inference = PeftModel.from_pretrained(base_model, output_dir)
-print("微調後的模型已載入。")
+# 直接使用 trainer 載入的最佳模型推理：原本訓練用的模型還留在 GPU 上，
+# 又另外載入一份 7B base model，容易 OOM
+model_for_inference = trainer.model
+model_for_inference.eval()
+print("使用最佳 checkpoint 進行推理。")
 
 texts_to_classify = test_df['text'].tolist()
 tweet_ids = test_df['id'].tolist()
 final_predictions = []
 
 for i, tweet_text in enumerate(texts_to_classify):
-    prompt = f"""
-    任務：判斷以下推文是否與真實災難相關。
-    如果推文與真實災難相關，請回答 '1'。
-    如果推文與真實災難不相關，請回答 '0'。\n請只回答 '1' 或 '0'，不要包含其他文字。\n\n推文: \"{tweet_text}\"\n答案:
-    """
     messages = [
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": build_prompt(tweet_text)},
     ]
 
     inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt")
@@ -270,7 +268,8 @@ for i, tweet_text in enumerate(texts_to_classify):
             do_sample=False,
             num_beams=1,
             eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.pad_token_id
+            pad_token_id=tokenizer.pad_token_id,
+            use_cache=True,  # 訓練時開 gradient checkpointing 會關掉 cache，推理時打開以加速
         )
 
     generated_response = tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True).strip()
@@ -293,8 +292,8 @@ submission_df.to_csv('submission_deepseek_lora.csv', index=False)
 print("\n提交文件 'submission_deepseek_lora.csv' 已生成！")
 
 # --- 11. 清理顯存 (原步驟 10，現在是 11) ---
+del trainer
 del model
-del base_model
 del model_for_inference
 del tokenizer
 del inputs
