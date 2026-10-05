@@ -126,6 +126,34 @@ It is a binary classification task, where tweets must be labeled as:
 
 ---
 
+## 5. Repository Structure
+
+```
+.
+├── data/                          # Kaggle dataset
+│   ├── train.csv
+│   ├── test.csv
+│   └── sample_submission.csv
+├── eda/
+│   └── EDA.ipynb                  # Class distribution, text length, word cloud
+├── models/
+│   ├── bilstm/                    # BiLSTM baseline (notebook)
+│   ├── distilbert/                # DistilBERT fine-tuning (notebook)
+│   ├── roberta/                   # RoBERTa fine-tuning (notebook)
+│   ├── deberta/                   # DeBERTa-v3 + focal loss (notebook)
+│   ├── ensemble_roberta_deberta/  # RoBERTa (LoRA) + DeBERTa logit ensemble (script)
+│   └── deepseek_lora/             # DeepSeek-LLM-7B 4-bit + LoRA instruction tuning (script)
+└── docs/
+    └── DL_team7_checkpoint4.pdf   # Project checkpoint report
+```
+
+Each folder under `models/` contains the code, a `README.md` and a `requirements.txt`.
+
+- **Notebooks** (`bilstm`, `distilbert`, `roberta`, `deberta`) were written for Google Colab and read data from `/content/`. Upload the files in `data/` to the Colab session before running them.
+- **Scripts** (`ensemble_roberta_deberta`, `deepseek_lora`) read `train.csv` / `test.csv` from the current working directory. Copy the files in `data/` there, or run the scripts from inside `data/`.
+
+---
+
 ##  Notes
 
 This project is based on the Kaggle challenge: [Real or Not? NLP with Disaster Tweets].  

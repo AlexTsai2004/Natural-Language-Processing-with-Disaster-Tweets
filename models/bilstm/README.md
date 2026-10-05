@@ -7,7 +7,7 @@
 
 ## 📁 專案檔案
 
-- `DL_BiLSTM_final.ipynb`：主程式 Notebook，內含資料處理、模型建立、訓練與測試全流程。
+- `BiLSTM.ipynb`：主程式 Notebook，內含資料處理、模型建立、訓練與測試全流程。
 
 ---
 
@@ -167,7 +167,7 @@ matplotlib
 ```bash
 pip install -r requirements.txt
 jupyter notebook
-# 打開 DL_BiLSTM_final.ipynb 執行每段程式碼
+# 打開 BiLSTM.ipynb 執行每段程式碼
 ```
 
 ---

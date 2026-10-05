@@ -17,7 +17,7 @@ This project performs disaster tweet classification using transformer-based mode
 
 ```
 .
-├── essemble.py                  # Main training and inference script
+├── ensemble.py                  # Main training and inference script
 ├── train.csv                    # Training dataset
 ├── test.csv                     # Test dataset
 ├── sample_submission.csv        # Sample format for submission
@@ -45,7 +45,7 @@ Ensure the following files are in your working directory:
 ### 3. Run the Script
 
 ```bash
-python essemble.py
+python ensemble.py
 ```
 
 The script will:

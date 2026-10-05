@@ -1,0 +1,11 @@
+__pycache__/
+.ipynb_checkpoints/
+runs/
+results/
+logs/
+*.pt
+submission*.csv
+essemble_submission.csv
+val_predictions.csv
+*_final_model/
+deepseek_lora_disaster_tweets/
